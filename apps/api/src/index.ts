@@ -1,19 +1,26 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 
+import jobs from "./routes/jobs.js";
+import tests from "./routes/tests.js";
+import submissions from "./routes/submissions.js";
+import verify from "./routes/verify.js";
+import sse from "./realtime/sse.js";
+
 const app = new Hono();
 
-app.get("/health", (c) => {
-  return c.json({ ok: true });
-});
+app.get("/health", (c) => c.json({ ok: true }));
+
+// Mount route groups
+app.route("/", jobs);
+app.route("/", tests);
+app.route("/", submissions);
+app.route("/", verify);
+app.route("/", sse);
 
 export default app;
 
 const port = Number(process.env.PORT ?? 8787);
-
-// Only start the server when this file is run directly (not when imported).
-// W2/W3 will mount their routes onto `app` before this entry is executed, or
-// import { app } from this module in their own entry.
 serve({ fetch: app.fetch, port }, (info) => {
   console.log(`[powp-api] listening on http://localhost:${info.port}`);
 });
