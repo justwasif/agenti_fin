@@ -50,6 +50,9 @@ app.post("/api/jobs/:id/tests", async (c) => {
   await emitEvent(jobId, "TESTS_FROZEN", { suiteHash: hash, version: 1 });
 
   const payment = await authorizePayment(jobId, job.amountCents);
+  // Kick off the autonomous worker loop (fire-and-forget) — no manual /run.
+  const { runAutopilot } = await import("../autopilot.js");
+  void runAutopilot(jobId);
   return c.json({ suiteId, hash, frozen: true, payment });
 });
 
@@ -78,6 +81,9 @@ app.post("/api/jobs/:id/tests/freeze", async (c) => {
   await emitEvent(jobId, "TESTS_FROZEN", { suiteHash: hash });
 
   const payment = await authorizePayment(jobId, job.amountCents);
+  // Kick off the autonomous worker loop (fire-and-forget) — no manual /run.
+  const { runAutopilot } = await import("../autopilot.js");
+  void runAutopilot(jobId);
   return c.json({ suiteId, hash, frozen: true, payment });
 });
 

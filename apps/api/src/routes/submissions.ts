@@ -70,31 +70,26 @@ app.post("/api/jobs/:id/run", async (c) => {
   const { verifyJob } = await import("../verifier/verify.js");
   const verdict = await verifyJob(jobId, deliverable);
 
-  // verifyJob sets CAPTURED on pass and FAILED on fail, but the real
-  // "money moment" (Stripe capture) has not happened yet. Override that
-  // premature state so CAPTURED only ever reflects a successful capture.
+  // verifyJob sets CAPTURED on pass and FAILED on fail. On pass, stage the
+  // state IN_PROGRESS and always call capturePayment (demo mode emits
+  // PAYMENT_CAPTURED {demo:true}; in a future Stripe path it would move money).
   let payment: PaymentState;
   if (verdict.result === "pass") {
-    // Hold is authorized but not charged yet — a passing verdict alone does
-    // not move money. Mark IN_PROGRESS until capture succeeds.
     await db
       .update(jobs)
       .set({ state: "IN_PROGRESS", updatedAt: new Date() })
       .where(eq(jobs.id, jobId));
 
-    payment = job.stripePaymentIntentId
-      ? await capturePayment(jobId, job.stripePaymentIntentId)
-      : { status: "unavailable", paymentIntentId: null };
+    payment = await capturePayment(jobId, job.stripePaymentIntentId ?? null);
   } else {
-    // Failure: leave the authorization hold active (requires_capture) so the
-    // worker can retry without re-authorizing.
+    // Failure: leave the job FAILED so the worker can retry.
     await db
       .update(jobs)
       .set({ state: "FAILED", updatedAt: new Date() })
       .where(eq(jobs.id, jobId));
     payment = {
-      status: job.stripePaymentIntentId ? "requires_capture" : "unavailable",
-      paymentIntentId: job.stripePaymentIntentId ?? null,
+      status: "unavailable",
+      paymentIntentId: null,
     };
   }
 

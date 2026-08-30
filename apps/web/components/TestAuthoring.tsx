@@ -25,6 +25,19 @@ function localPreview(t: TestCase): TestPreview {
   let error: string | undefined;
   try {
     switch (t.function) {
+      case "cleanEmails": {
+        const seen = new Set<string>();
+        const out: string[] = [];
+        for (const item of t.input as unknown[]) {
+          const v = String(item).trim().toLowerCase();
+          if (v === "") continue;
+          if (seen.has(v)) continue;
+          seen.add(v);
+          out.push(v);
+        }
+        actual = out;
+        break;
+      }
       case "dedupe": {
         const seen = new Set<string>();
         actual = (t.input as unknown[]).filter((item) => {
@@ -70,7 +83,11 @@ export function TestAuthoring({
 }) {
   const [mode, setMode] = useState<AuthorMode>("agent");
   const [requirements, setRequirements] = useState(
-    "Pure functions only: add(a,b)->number, clamp(value,min,max)->number, slugify(text)->string. Deterministic, no I/O.",
+    `Create deterministic test cases for a JavaScript function named cleanEmails(emails).
+
+The function must trim whitespace, lowercase emails, remove duplicates after normalization, ignore blank values, preserve first-seen order, and return [] for [].
+
+Include normal cases, duplicate/case cases, blank values, order preservation, and empty input. Return only executable tests.`,
   );
   const [tests, setTests] = useState<TestCase[]>([]);
   const [preview, setPreview] = useState<TestPreview[]>([]);

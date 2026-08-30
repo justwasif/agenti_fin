@@ -9,9 +9,24 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 
 export function RequestBuilder({ onCreated }: { onCreated: (job: Job) => void }) {
-  const [title, setTitle] = useState("");
-  const [requestText, setRequestText] = useState("");
-  const [amountCents, setAmountCents] = useState("5000");
+  const [title, setTitle] = useState("Clean Customer Email List");
+  const [requestText, setRequestText] = useState(`Build a JavaScript function named cleanEmails(emails).
+
+It receives an array of email addresses and returns a clean array.
+
+Rules:
+- Remove leading and trailing spaces.
+- Convert all addresses to lowercase.
+- Remove duplicate emails after normalizing them.
+- Preserve the order of the first appearance.
+- Ignore empty strings and whitespace-only values.
+- Return an empty array when given an empty array.
+
+Example:
+[" Alice@Example.com ", "alice@example.com", "BOB@example.com", " "]
+should return:
+["alice@example.com", "bob@example.com"]`);
+  const [amountCents, setAmountCents] = useState("100");
   const [buyerId, setBuyerId] = useState("buyer-demo-1");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +66,7 @@ export function RequestBuilder({ onCreated }: { onCreated: (job: Job) => void })
             id="rb-title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Pure utility functions: add, clamp, slugify"
+            placeholder="e.g. Clean Customer Email List"
             required
           />
           <Textarea

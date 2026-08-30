@@ -1,118 +1,54 @@
-import { createPool, createDb } from "../db/index.js";
-import { jobs } from "../db/index.js";
-import { eq } from "drizzle-orm";
 import { emitEvent } from "../realtime/publish.js";
 
 /**
- * Test-mode payment lifecycle glue for the route layer.
+ * Demo-mode payment lifecycle glue for the route layer.
  *
- * Stripe's `capture_method: 'manual'` authorization hold is the native escrow:
- * freeze → create PI + confirm (status `requires_capture`, money held, never
- * moved); run pass → capture (status `succeeded`); run fail → hold left active
- * for retry.
+ * The production design relies on Stripe's `capture_method: 'manual'`
+ * authorization hold as the native escrow: freeze → create PI + confirm
+ * (status `requires_capture`, money held); run pass → capture; run fail →
+ * hold left active for retry. That Stripe path lives in `../stripe/payment.ts`
+ * (still present but NOT called from the runtime here).
  *
- * Everything here is defensive: if STRIPE_SECRET_KEY is absent (or a call
- * throws), we record a clear `PAYMENT_UNAVAILABLE` event and return a truthful
- * `status: 'unavailable'` rather than pretending a capture happened.
+ * For the presentation demo we run WITHOUT any Stripe keys or network calls:
+ * every payment step is a no-op that only emits the same lifecycle events the
+ * UI already renders, with `{ demo: true }` payloads.
  */
-
-const pool = createPool();
-const db = createDb(pool);
+export const DEMO_MODE = true; // demo mode: no live Stripe — remove this gate to re-enable payments
 
 export interface PaymentState {
   status: string | null;
   paymentIntentId: string | null;
 }
 
-/** True when a real Stripe test key is present (vs. W2's placeholder). */
-export function stripeConfigured(): boolean {
-  const key = process.env.STRIPE_SECRET_KEY;
-  return !!key && key !== "sk_test_REPLACE_ME";
-}
-
 /**
- * Authorize the buyer at freeze time. Creates a manual-capture PaymentIntent
- * for `amountCents`, confirms `pm_card_visa`, persists the PI id on the job,
- * and emits PAYMENT_AUTHORIZED. On any failure returns `unavailable`.
+ * Authorize the buyer at freeze time. Demo stub: no Stripe call, no DB write,
+ * no PaymentIntent. Just emits PAYMENT_AUTHORIZED so the UI's activity feed
+ * keeps working, and returns a truthful `status: 'demo'`.
  */
 export async function authorizePayment(
   jobId: string,
   amountCents: number
 ): Promise<PaymentState> {
-  if (!stripeConfigured()) {
-    await emitEvent(jobId, "PAYMENT_UNAVAILABLE", {
-      reason: "STRIPE_SECRET_KEY not set — mock/test-mode (no authorization hold)",
-    });
-    return { status: "unavailable", paymentIntentId: null };
-  }
-
-  try {
-    const { createPaymentIntent, confirmPaymentIntent } = await import(
-      "../stripe/payment.js"
-    );
-    const pi = await createPaymentIntent(amountCents);
-    const confirmed = await confirmPaymentIntent(pi.id);
-
-    await db
-      .update(jobs)
-      .set({ stripePaymentIntentId: pi.id, updatedAt: new Date() })
-      .where(eq(jobs.id, jobId));
-
-    await emitEvent(jobId, "PAYMENT_AUTHORIZED", {
-      paymentIntentId: pi.id,
-      status: confirmed.status,
-      amountCents,
-    });
-
-    return { status: confirmed.status, paymentIntentId: pi.id };
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    await emitEvent(jobId, "PAYMENT_UNAVAILABLE", { reason });
-    return { status: "unavailable", paymentIntentId: null };
-  }
+  await emitEvent(jobId, "PAYMENT_AUTHORIZED", {
+    status: "demo",
+    amountCents,
+    demo: true,
+  });
+  return { status: "demo", paymentIntentId: null };
 }
 
 /**
- * Capture the held amount after a passing verdict. Only flips the job to
- * CAPTURED once Stripe reports `succeeded`. Any other status (or an error)
- * leaves the hold active for a later retry.
+ * Capture the held amount after a passing verdict. Demo stub: no Stripe call.
+ * `verifyJob` already set the job state to CAPTURED on pass, so we only emit
+ * the PAYMENT_CAPTURED event (with `demo: true`) and return.
  */
 export async function capturePayment(
   jobId: string,
-  paymentIntentId: string
+  _paymentIntentId: string | null
 ): Promise<PaymentState> {
-  if (!stripeConfigured()) {
-    await emitEvent(jobId, "PAYMENT_UNAVAILABLE", {
-      reason: "STRIPE_SECRET_KEY not set — mock/test-mode (no capture)",
-    });
-    return { status: "unavailable", paymentIntentId };
-  }
-
-  try {
-    const { capturePaymentIntent } = await import("../stripe/payment.js");
-    const captured = await capturePaymentIntent(paymentIntentId);
-
-    if (captured.status === "succeeded") {
-      await db
-        .update(jobs)
-        .set({ state: "CAPTURED", updatedAt: new Date() })
-        .where(eq(jobs.id, jobId));
-      await emitEvent(jobId, "PAYMENT_CAPTURED", {
-        paymentIntentId,
-        status: captured.status,
-      });
-    } else {
-      // Not succeeded (e.g. still requires_capture / error) — leave hold open.
-      await emitEvent(jobId, "PAYMENT_CAPTURE_PENDING", {
-        paymentIntentId,
-        status: captured.status,
-      });
-    }
-
-    return { status: captured.status, paymentIntentId };
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    await emitEvent(jobId, "PAYMENT_CAPTURE_FAILED", { paymentIntentId, reason });
-    return { status: "error", paymentIntentId };
-  }
+  await emitEvent(jobId, "PAYMENT_CAPTURED", {
+    status: "demo",
+    demo: true,
+  });
+  return { status: "demo", paymentIntentId: null };
 }
