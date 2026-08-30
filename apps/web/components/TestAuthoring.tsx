@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Tabs } from "@/components/ui/Tabs";
 
 const SAMPLE_INPUTS: Record<string, unknown> = {
+  dedupe: ["A", "a", "B", "b"],
   add: { a: 2, b: 3 },
   clamp: { value: 42, min: 0, max: 10 },
   slugify: { text: "Hello World!" },
@@ -24,6 +25,16 @@ function localPreview(t: TestCase): TestPreview {
   let error: string | undefined;
   try {
     switch (t.function) {
+      case "dedupe": {
+        const seen = new Set<string>();
+        actual = (t.input as unknown[]).filter((item) => {
+          const key = String(item).toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        break;
+      }
       case "add":
         actual = (t.input as { a: number; b: number }).a + (t.input as { a: number; b: number }).b;
         break;
@@ -76,7 +87,15 @@ export function TestAuthoring({
         requirements: mode === "agent" ? requirements : undefined,
         tests: mode === "manual" ? defaultManualTests() : undefined,
       });
-      const proposed = (res as { tests?: TestCase[] }).tests ?? [];
+      if ("frozen" in res && res.frozen) {
+        const manual = defaultManualTests();
+        setTests(manual);
+        setPreview(manual.map(localPreview));
+        setFrozen(true);
+        onFrozen(manual);
+        return;
+      }
+      const proposed = "proposed" in res ? res.proposed ?? res.tests ?? [] : [];
       setTests(proposed);
       setPreview(proposed.map(localPreview));
     } catch (err) {
@@ -90,7 +109,7 @@ export function TestAuthoring({
     setBusy(true);
     setError(null);
     try {
-      await api.freezeTests(jobId);
+      await api.freezeTests(jobId, tests);
       setFrozen(true);
       onFrozen(tests);
     } catch (err) {
@@ -127,7 +146,9 @@ export function TestAuthoring({
           />
         ) : (
           <p className="text-xs text-muted">
-            Manual mode freezes the built-in sample suite (add / clamp / slugify).
+            Manual mode freezes one deterministic <code className="font-mono">dedupe</code> case
+            compatible with the live verifier. Load it, then run the included failing and
+            fixed deliverable examples in the live view.
           </p>
         )}
 
@@ -176,10 +197,13 @@ export function TestAuthoring({
 }
 
 function defaultManualTests(): TestCase[] {
-  const inputs = SAMPLE_INPUTS;
   return [
-    { id: "t-add", name: "add returns the sum", function: "add", input: inputs.add, expected: 5 },
-    { id: "t-clamp", name: "clamp pins into range", function: "clamp", input: inputs.clamp, expected: 10 },
-    { id: "t-slugify", name: "slugify normalizes text", function: "slugify", input: inputs.slugify, expected: "hello-world" },
+    {
+      id: "dedupe-basic",
+      name: "dedupe removes case-insensitive repeats",
+      function: "dedupe",
+      input: ["A", "a", "B", "b"],
+      expected: ["A", "B"],
+    },
   ];
 }

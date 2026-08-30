@@ -7,6 +7,7 @@ import { TestCase, createTestSuiteHash } from "@powp/shared";
 import { emitEvent } from "../realtime/publish.js";
 import { generateTests } from "../agents/test-authoring.js";
 import { eq } from "drizzle-orm";
+import { authorizePayment, type PaymentState } from "./payment-helper.js";
 
 const app = new Hono();
 const pool = createPool();
@@ -47,13 +48,18 @@ app.post("/api/jobs/:id/tests", async (c) => {
 
   await db.update(jobs).set({ testSuiteHash: hash, state: "LOCKED", updatedAt: new Date() }).where(eq(jobs.id, jobId));
   await emitEvent(jobId, "TESTS_FROZEN", { suiteHash: hash, version: 1 });
-  return c.json({ suiteId, hash, frozen: true });
+
+  const payment = await authorizePayment(jobId, job.amountCents);
+  return c.json({ suiteId, hash, frozen: true, payment });
 });
 
 app.post("/api/jobs/:id/tests/freeze", async (c) => {
   const jobId = c.req.param("id");
   const body = await c.req.json();
   const { tests } = FreezeBody.parse(body);
+
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId));
+  if (!job) return c.json({ error: "job not found" }, 404);
 
   const hash = createTestSuiteHash(tests);
   const suiteId = randomUUID();
@@ -70,7 +76,9 @@ app.post("/api/jobs/:id/tests/freeze", async (c) => {
 
   await db.update(jobs).set({ testSuiteHash: hash, state: "LOCKED", updatedAt: new Date() }).where(eq(jobs.id, jobId));
   await emitEvent(jobId, "TESTS_FROZEN", { suiteHash: hash });
-  return c.json({ suiteId, hash, frozen: true });
+
+  const payment = await authorizePayment(jobId, job.amountCents);
+  return c.json({ suiteId, hash, frozen: true, payment });
 });
 
 export default app;

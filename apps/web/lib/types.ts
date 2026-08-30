@@ -8,7 +8,18 @@ export type JobState = z.infer<typeof JobStateSchema>;
 export type TestCase = z.infer<typeof TestCaseSchema>;
 export type TestSuite = z.infer<typeof TestSuiteSchema>;
 export type TestResult = z.infer<typeof TestResultSchema>;
-export type Verdict = z.infer<typeof VerdictSchema>;
+export interface ApiVerdict {
+  result: "pass" | "fail";
+  testsRun: number;
+  testsPassed: number;
+  results?: TestResult[];
+  resultsJson?: TestResult[];
+  evidenceHash: string;
+}
+
+export interface Verdict extends Omit<ApiVerdict, "results" | "resultsJson"> {
+  results: TestResult[];
+}
 
 export type AuthorMode = "manual" | "agent";
 
@@ -53,8 +64,18 @@ export interface TestsRequest {
 }
 
 export interface ProposedTests {
-  tests: TestCase[];
-  preview: TestPreview[];
+  /** Agent-mode API response. */
+  proposed?: TestCase[];
+  /** Legacy / mock shape supported during local development. */
+  tests?: TestCase[];
+  hash?: string;
+  mode?: "agent";
+}
+
+export interface FreezeResult {
+  suiteId: string;
+  hash: string;
+  frozen: true;
 }
 
 export interface TestPreview {
@@ -65,5 +86,5 @@ export interface TestPreview {
 }
 
 export interface RunResult {
-  verdict: Verdict;
+  verdict: ApiVerdict;
 }

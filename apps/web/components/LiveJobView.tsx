@@ -3,11 +3,37 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { subscribeToJob } from "@/lib/realtime";
-import type { JobDetail, JobState, Verdict } from "@/lib/types";
+import type { ApiVerdict, JobDetail, JobState, TestResult, Verdict } from "@/lib/types";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
+import { Textarea } from "@/components/ui/Textarea";
 import { StateTimeline } from "@/components/StateTimeline";
+
+function toVerdict(verdict: ApiVerdict): Verdict {
+  return {
+    ...verdict,
+    results: verdict.results ?? verdict.resultsJson ?? [],
+  };
+}
+
+const FAILING_DEDUPE = `module.exports.dedupe = (items) => [...new Set(items)]`;
+const FIXED_DEDUPE = `module.exports.dedupe = (items) => {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = String(item).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}`;
+
+function normalizeDetail(detail: JobDetail): JobDetail {
+  return {
+    ...detail,
+    verdicts: detail.verdicts.map((verdict) => toVerdict(verdict)),
+  };
+}
 
 function money(amountCents: number) {
   return `$${(amountCents / 100).toFixed(2)}`;
@@ -17,10 +43,11 @@ export function LiveJobView({ jobId }: { jobId: string }) {
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [deliverable, setDeliverable] = useState(FAILING_DEDUPE);
 
   const refresh = useCallback(async () => {
     try {
-      setDetail(await api.getJob(jobId));
+      setDetail(normalizeDetail(await api.getJob(jobId)));
     } catch {
       /* backend not up yet */
     }
@@ -30,7 +57,7 @@ export function LiveJobView({ jobId }: { jobId: string }) {
     refresh();
     return subscribeToJob(jobId, (u) => {
       if ("job" in u && u.job) {
-        setDetail(u as JobDetail);
+        setDetail(normalizeDetail(u as JobDetail));
       } else {
         // partial SSE event frame — refetch the full record.
         refresh();
@@ -42,8 +69,10 @@ export function LiveJobView({ jobId }: { jobId: string }) {
     setRunning(true);
     setError(null);
     try {
-      const { verdict } = await api.runJob(jobId);
-      setDetail((d) => (d ? { ...d, verdicts: [...d.verdicts, verdict] } : d));
+      const { verdict } = await api.runJob(jobId, deliverable);
+      const normalized = toVerdict(verdict);
+      setDetail((d) => (d ? { ...d, verdicts: [normalized, ...d.verdicts] } : d));
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Run failed");
     } finally {
@@ -55,8 +84,10 @@ export function LiveJobView({ jobId }: { jobId: string }) {
     setRunning(true);
     setError(null);
     try {
-      const { verdict } = await api.verifyJob(jobId);
-      setDetail((d) => (d ? { ...d, verdicts: [...d.verdicts, verdict] } : d));
+      const { verdict } = await api.verifyJob(jobId, deliverable);
+      const normalized = toVerdict(verdict);
+      setDetail((d) => (d ? { ...d, verdicts: [normalized, ...d.verdicts] } : d));
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Replay failed");
     } finally {
@@ -106,6 +137,29 @@ export function LiveJobView({ jobId }: { jobId: string }) {
         <CardBody className="space-y-4">
           <StateTimeline current={state} />
           <p className="text-sm leading-relaxed text-muted">{detail.job.requestText}</p>
+          <Textarea
+            label="Deliverable source (test mode)"
+            id="live-deliverable"
+            rows={9}
+            value={deliverable}
+            onChange={(event) => setDeliverable(event.target.value)}
+            hint="Run verifies exactly this source. Start with the failing implementation, then replace it with the fixed one and run again."
+            className="font-mono text-xs leading-relaxed"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setDeliverable(FAILING_DEDUPE)}>
+              Load failing example
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setDeliverable(FIXED_DEDUPE)}>
+              Load fixed example
+            </Button>
+          </div>
+          <p className="rounded-xl bg-ink/[0.035] px-3 py-2 text-[11px] leading-relaxed text-muted">
+            <span className="font-semibold text-ink">Proof result only.</span>{" "}
+            {state === "CAPTURED"
+              ? "The verifier reports a passing proof. This UI does not claim a payment capture occurred."
+              : "A test result updates the proof state; payment settlement is not asserted by this screen."}
+          </p>
         </CardBody>
       </Card>
 
