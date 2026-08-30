@@ -1,74 +1,74 @@
 import { useState } from "react";
 import type { DemoState } from "../App";
+import { proposeTests, type ProposedTest } from "../api";
+import { loadJobContext } from "./RequestBuilder";
 
 interface Props {
   demoState: DemoState;
-  onFreeze: () => void;
+  onFreeze: (tests: ProposedTest[]) => void;
 }
 
-interface TestCase {
-  id: string;
-  name: string;
-  input: unknown;
-  expected: unknown;
+type ProposalState = "idle" | "working" | "proposed" | "frozen" | "error";
+
+export const FROZEN_TESTS_KEY = "powp-frozen-tests";
+
+export function loadFrozenTests(): ProposedTest[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(FROZEN_TESTS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
-const HARDCODED_TESTS: TestCase[] = [
-  {
-    id: "t1",
-    name: "normal + case + trim",
-    input: [" Alice@Example.com ", "alice@example.com", "BOB@example.com", " "],
-    expected: ["alice@example.com", "bob@example.com"],
-  },
-  {
-    id: "t2",
-    name: "empty array",
-    input: [],
-    expected: [],
-  },
-  {
-    id: "t3",
-    name: "blank-only values ignored",
-    input: ["  ", "\t", " ", ""],
-    expected: [],
-  },
-  {
-    id: "t4",
-    name: "order preservation",
-    input: ["b@x.com", "A@X.com", "b@x.com", "C@X.com"],
-    expected: ["b@x.com", "a@x.com", "c@x.com"],
-  },
-  {
-    id: "t5",
-    name: "duplicate/case normalization",
-    input: ["a@b.com", "A@B.COM", "a@b.com", "  A@B.com  "],
-    expected: ["a@b.com"],
-  },
-];
-
-type ProposalState = "idle" | "working" | "proposed" | "frozen";
+function saveFrozenTests(tests: ProposedTest[]) {
+  try {
+    sessionStorage.setItem(FROZEN_TESTS_KEY, JSON.stringify(tests));
+  } catch {
+    // ignore
+  }
+}
 
 export default function TestAuthoring({ demoState, onFreeze }: Props) {
   const [requirements, setRequirements] = useState("");
   const [proposalState, setProposalState] = useState<ProposalState>("idle");
+  const [tests, setTests] = useState<ProposedTest[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<"gemini" | "fallback" | null>(null);
 
   const isLocked =
     demoState === "frozen" || demoState === "running" || demoState === "done";
 
-  function handlePropose() {
+  async function handlePropose() {
     setProposalState("working");
-    setTimeout(() => {
+    setError(null);
+    try {
+      const ctx = loadJobContext();
+      const res = await proposeTests(ctx.title, ctx.request);
+      setTests(res.tests);
+      setSource(res.source);
       setProposalState("proposed");
-    }, 2000);
+    } catch (err) {
+      setError((err as Error).message);
+      setProposalState("error");
+    }
   }
 
   function handleFreeze() {
+    saveFrozenTests(tests);
     setProposalState("frozen");
-    onFreeze();
+    onFreeze(tests);
   }
 
   function formatJson(val: unknown): string {
-    return JSON.stringify(val);
+    try {
+      return JSON.stringify(val);
+    } catch {
+      return String(val);
+    }
   }
 
   const stepDone = isLocked || proposalState === "frozen";
@@ -83,6 +83,23 @@ export default function TestAuthoring({ demoState, onFreeze }: Props) {
           {stepDone ? "✓" : "2"}
         </span>
         <span>Author Test Suite</span>
+        {source === "gemini" && proposalState === "proposed" && !isLocked && (
+          <span className="badge badge-indigo" style={{ marginLeft: 8 }}>
+            Gemini
+          </span>
+        )}
+        {source === "fallback" && proposalState === "proposed" && !isLocked && (
+          <span
+            className="badge"
+            style={{
+              marginLeft: 8,
+              background: "var(--amber-soft)",
+              color: "var(--amber)",
+            }}
+          >
+            Fallback
+          </span>
+        )}
         {stepDone && (
           <span className="badge badge-green" style={{ marginLeft: "auto" }}>
             Suite frozen
@@ -91,8 +108,9 @@ export default function TestAuthoring({ demoState, onFreeze }: Props) {
       </div>
 
       <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
-        AI proposes verifiable test cases — review and freeze them before the
-        agent starts work.
+        The test-authoring agent reads your job request and proposes
+        deterministic, re-runnable test cases. Review and freeze them
+        before the worker agent starts.
       </p>
 
       {/* Requirements textarea */}
@@ -122,6 +140,27 @@ export default function TestAuthoring({ demoState, onFreeze }: Props) {
         <button onClick={handlePropose} className="btn">
           Propose tests →
         </button>
+      )}
+
+      {/* Error state */}
+      {proposalState === "error" && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "10px 0",
+          }}
+        >
+          <span className="status-red text-sm">⚠ {error}</span>
+          <button
+            onClick={handlePropose}
+            className="btn btn-ghost"
+            style={{ padding: "4px 10px", fontSize: 12 }}
+          >
+            Retry
+          </button>
+        </div>
       )}
 
       {/* Working state */}
@@ -158,17 +197,13 @@ export default function TestAuthoring({ demoState, onFreeze }: Props) {
             >
               Proposed test cases
             </span>
-            <span className="text-muted text-xs">
-              {HARDCODED_TESTS.length} cases
-            </span>
+            <span className="text-muted text-xs">{tests.length} cases</span>
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {HARDCODED_TESTS.map((tc) => (
+            {tests.map((tc) => (
               <div key={tc.id} className="test-pill pass">
-                {/* PASS badge */}
                 <span className="badge badge-green">PASS</span>
-
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
@@ -178,9 +213,7 @@ export default function TestAuthoring({ demoState, onFreeze }: Props) {
                       marginBottom: 4,
                     }}
                   >
-                    <span className="font-mono text-xs text-muted">
-                      {tc.id}
-                    </span>
+                    <span className="font-mono text-xs text-muted">{tc.id}</span>
                     <span style={{ fontSize: 13, fontWeight: 600 }}>
                       {tc.name}
                     </span>
@@ -197,7 +230,9 @@ export default function TestAuthoring({ demoState, onFreeze }: Props) {
                     </div>
                     <div>
                       <span style={{ opacity: 0.6 }}>→ </span>
-                      <span className="status-green">{formatJson(tc.expected)}</span>
+                      <span className="status-green">
+                        {formatJson(tc.expected)}
+                      </span>
                     </div>
                   </div>
                 </div>

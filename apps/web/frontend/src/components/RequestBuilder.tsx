@@ -24,6 +24,40 @@ The function must handle all edge cases: mixed case, extra spaces, duplicate ema
 
 const DEFAULT_BUDGET = 100;
 
+export const JOB_STORAGE_KEY = "powp-job-context";
+
+export function loadJobContext(): { title: string; request: string; budget: number } {
+  if (typeof window === "undefined") {
+    return { title: DEFAULT_TITLE, request: DEFAULT_REQUEST, budget: DEFAULT_BUDGET };
+  }
+  try {
+    const raw = sessionStorage.getItem(JOB_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.title === "string" && typeof parsed.request === "string") {
+        return {
+          title: parsed.title || DEFAULT_TITLE,
+          request: parsed.request || DEFAULT_REQUEST,
+          budget: Number(parsed.budget) || DEFAULT_BUDGET,
+        };
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return { title: DEFAULT_TITLE, request: DEFAULT_REQUEST, budget: DEFAULT_BUDGET };
+}
+
+function saveJobContext(title: string, request: string, budget: number) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(JOB_STORAGE_KEY, JSON.stringify({ title, request, budget }));
+    window.dispatchEvent(new Event("powp-job-context-changed"));
+  } catch {
+    // ignore
+  }
+}
+
 export default function RequestBuilder({ demoState, onCreate }: Props) {
   const [title, setTitle] = useState("");
   const [request, setRequest] = useState("");
@@ -33,7 +67,12 @@ export default function RequestBuilder({ demoState, onCreate }: Props) {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    onCreate(DEFAULT_TITLE, DEFAULT_REQUEST, DEFAULT_BUDGET);
+    const finalTitle = title.trim() || DEFAULT_TITLE;
+    const finalRequest = request.trim() || DEFAULT_REQUEST;
+    const finalBudget =
+      typeof budget === "number" && budget > 0 ? budget : DEFAULT_BUDGET;
+    saveJobContext(finalTitle, finalRequest, finalBudget);
+    onCreate(finalTitle, finalRequest, finalBudget);
   }
 
   return (
@@ -160,7 +199,7 @@ export default function RequestBuilder({ demoState, onCreate }: Props) {
             className="text-muted text-xs"
             style={{ marginTop: 4 }}
           >
-            =${(DEFAULT_BUDGET / 100).toFixed(2)} — held in escrow, released only on
+            =${((typeof budget === "number" && budget > 0 ? budget : DEFAULT_BUDGET) / 100).toFixed(2)} — held in escrow, released only on
             proof
           </p>
         </div>

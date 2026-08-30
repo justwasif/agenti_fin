@@ -1,31 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { DemoState } from "../App";
+import {
+  runJob,
+  type ProposedTest,
+  type VerifierAttempt,
+  type WorkerResult,
+} from "../api";
+import { loadJobContext } from "./RequestBuilder";
 
 interface Props {
   demoState: DemoState;
   onStateChange: (s: DemoState) => void;
 }
 
-// ─── Test case definitions ──────────────────────────────────────────────────
-
-interface TestCase {
-  id: string;
-  name: string;
-}
-
-const ALL_TESTS: TestCase[] = [
-  { id: "t1", name: "normal + case + trim" },
-  { id: "t2", name: "empty array" },
-  { id: "t3", name: "blank-only values ignored" },
-  { id: "t4", name: "order preservation" },
-  { id: "t5", name: "duplicate/case normalization" },
-];
-
-// Attempt 1: t2, t3 PASS — t1, t4, t5 FAIL (2/5)
-const ATTEMPT1_PASS = new Set(["t2", "t3"]);
-
-// ─── Activity feed event ────────────────────────────────────────────────────
-
+// ─── Activity feed event ──────────────────────────────────────────────────
 type EventKind = "working" | "fail" | "pass" | "capture" | "info";
 
 interface FeedEvent {
@@ -34,16 +22,13 @@ interface FeedEvent {
   message: string;
 }
 
-// ─── Step indicator ─────────────────────────────────────────────────────────
-
+// ─── Step indicator ───────────────────────────────────────────────────────
 type Step = "Authoring" | "Verifying" | "Capturing" | "Done";
 const STEPS: Step[] = ["Authoring", "Verifying", "Capturing", "Done"];
 
-// ─── Component ──────────────────────────────────────────────────────────────
-
+// ─── Component ────────────────────────────────────────────────────────────
 export default function LiveJobView({ demoState, onStateChange }: Props) {
   const startedRef = useRef(false);
-  const rafRef = useRef<number | null>(null);
   const counterRef = useRef(0);
 
   const [feedEvents, setFeedEvents] = useState<FeedEvent[]>([]);
@@ -51,14 +36,16 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
   const [doneSteps, setDoneSteps] = useState<Set<Step>>(new Set());
   const [isDone, setIsDone] = useState(false);
 
-  const [attempt1Done, setAttempt1Done] = useState(false);
-  const [attempt1Results, setAttempt1Results] = useState<
-    { id: string; name: string; pass: boolean }[]
-  >([]);
-  const [attempt2Done, setAttempt2Done] = useState(false);
+  const [tests, setTests] = useState<ProposedTest[]>([]);
+  const [worker, setWorker] = useState<WorkerResult | null>(null);
+  const [attempts, setAttempts] = useState<VerifierAttempt[]>([]);
+  const [attemptsDone, setAttemptsDone] = useState(0);
+  const [currentAttempt, setCurrentAttempt] = useState<VerifierAttempt | null>(
+    null
+  );
+  const [error, setError] = useState<string | null>(null);
 
-  // ─── Helpers ────────────────────────────────────────────────────────────
-
+  // ─── Helpers ───────────────────────────────────────────────────────────
   function addEvent(kind: EventKind, message: string) {
     const id = ++counterRef.current;
     setFeedEvents((prev) => [{ id, kind, message }, ...prev]);
@@ -68,124 +55,116 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
     setDoneSteps((prev) => new Set([...prev, step]));
   }
 
-  // ─── Scripted sequence ──────────────────────────────────────────────────
-
+  // ─── Scripted sequence (driven by API + randomized plan) ───────────────
   useEffect(() => {
-    // Only start when state becomes "frozen" and we haven't started yet.
-    // Note: demoState is intentionally NOT in the dep array — App re-renders
-    // this component with demoState="running" then "done", which would
-    // re-fire this effect and reset the timeline.
     if (startedRef.current) return;
     if (demoState !== "frozen") return;
     startedRef.current = true;
 
     onStateChange("running");
 
-    // ── Timeline: { at: ms, fn } entries ──────────────────────────────────
-    // t=0s: Start authoring attempt 1
-    // t=4s: Deliverable written, start verifier
-    // t=7s: Verification FAILED — 2/5
-    // t=9s: Retrying, start attempt 2
-    // t=14s: Attempt 2 deliverable written
-    // t=17s: Verification PASSED — 5/5
-    // t=18s: Payment captured + Done
-    const timeline: { at: number; fn: () => void }[] = [
-      {
-        at: 0,
-        fn: () => {
-          addEvent("working", "Authoring deliverable…");
-          setCurrentStep("Authoring");
-        },
-      },
-      {
-        at: 4000,
-        fn: () => {
-          addEvent("info", "Deliverable written");
-          addEvent("working", "Running verifier…");
-          setCurrentStep("Verifying");
-        },
-      },
-      {
-        at: 7000,
-        fn: () => {
-          addEvent("fail", "Verification failed — 2/5 tests passed");
-          const results = ALL_TESTS.map((tc) => ({
-            id: tc.id,
-            name: tc.name,
-            pass: ATTEMPT1_PASS.has(tc.id),
-          }));
-          setAttempt1Results(results);
-          setAttempt1Done(true);
-        },
-      },
-      {
-        at: 9000,
-        fn: () => {
-          addEvent("working", "Retrying…");
-          addEvent("working", "Authoring deliverable… (attempt 2)");
-          setCurrentStep("Authoring");
-        },
-      },
-      {
-        at: 14000,
-        fn: () => {
-          addEvent("info", "Deliverable written");
-          addEvent("working", "Running verifier…");
-          setCurrentStep("Verifying");
-        },
-      },
-      {
-        at: 17000,
-        fn: () => {
-          addEvent("pass", "Verification passed — 5/5 tests passed ✓");
-          setAttempt2Done(true);
-          markStepDone("Authoring");
-          markStepDone("Verifying");
-          setCurrentStep("Capturing");
-        },
-      },
-      {
-        at: 18000,
-        fn: () => {
-          addEvent("capture", "Payment captured ✓");
-          markStepDone("Capturing");
-          setCurrentStep("Done");
-          setIsDone(true);
-          onStateChange("done");
-        },
-      },
-    ];
+    let cancelled = false;
+    const timeouts: number[] = [];
 
-    // ── RAF loop — fires entries by wall-clock elapsed time ───────────────
-    const startTime = Date.now();
-    const fired = new Set<number>();
+    function t(fn: () => void, ms: number) {
+      const id = window.setTimeout(() => {
+        if (!cancelled) fn();
+      }, ms);
+      timeouts.push(id);
+    }
 
-    function tick() {
-      const elapsed = Date.now() - startTime;
-      timeline.forEach((entry, idx) => {
-        if (!fired.has(idx) && elapsed >= entry.at) {
-          fired.add(idx);
-          entry.fn();
+    async function start() {
+      setCurrentStep("Authoring");
+      addEvent("working", "Worker agent is starting…");
+      t(() => addEvent("info", "Reading the frozen test suite"), 800);
+      t(() => addEvent("info", "Drafting deliverable…"), 1800);
+
+      let jobRes: Awaited<ReturnType<typeof runJob>>;
+      try {
+        const ctx = loadJobContext();
+        jobRes = await runJob(ctx.title, ctx.request);
+      } catch (err) {
+        setError((err as Error).message);
+        addEvent("fail", `API error: ${(err as Error).message}`);
+        return;
+      }
+      if (cancelled) return;
+
+      setTests(jobRes.tests);
+      setWorker(jobRes.worker);
+      setAttempts(jobRes.plan.attempts);
+
+      const workerNote = jobRes.worker.source === "fallback" ? " (fallback)" : "";
+      addEvent("info", `Deliverable written${workerNote}`);
+      addEvent("working", "Running verifier…");
+      setCurrentStep("Verifying");
+
+      // Run attempts sequentially
+      for (let i = 0; i < jobRes.plan.attempts.length; i++) {
+        if (cancelled) return;
+        const a = jobRes.plan.attempts[i];
+        const isFinal = i === jobRes.plan.attempts.length - 1;
+        const isRetry = i > 0;
+
+        if (isRetry) {
+          t(() => {
+            addEvent("info", "Worker is fixing the failing cases…");
+            addEvent("working", "Re-authoring deliverable…");
+            setCurrentStep("Authoring");
+          }, 900);
+          t(() => {
+            addEvent("info", "Re-submitted to verifier");
+            addEvent("working", "Running verifier…");
+            setCurrentStep("Verifying");
+          }, 2400);
         }
-      });
-      if (fired.size < timeline.length) {
-        rafRef.current = requestAnimationFrame(tick);
+
+        // Wait a beat for the activity to read naturally
+        t(() => {
+          setCurrentAttempt(a);
+          setAttemptsDone(i + 1);
+
+          if (a.passed) {
+            addEvent(
+              "pass",
+              `Verification passed — ${a.testsPassed}/${a.totalTests} tests passed ✓`
+            );
+          } else {
+            const failing = (a.failingTestIds ?? []).join(", ");
+            addEvent(
+              "fail",
+              `Verification failed — ${a.testsPassed}/${a.totalTests} tests passed · failing: ${failing}`
+            );
+          }
+        }, isRetry ? 3600 : 1600);
+
+        if (isFinal) {
+          // Mark Authoring/Verifying done and move to capture
+          t(() => {
+            markStepDone("Authoring");
+            markStepDone("Verifying");
+            setCurrentStep("Capturing");
+            addEvent("capture", "Payment captured ✓");
+            markStepDone("Capturing");
+            setCurrentStep("Done");
+            setIsDone(true);
+            onStateChange("done");
+          }, isRetry ? 4400 : 2200);
+        }
       }
     }
-    rafRef.current = requestAnimationFrame(tick);
+
+    void start();
 
     return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
+      cancelled = true;
+      for (const id of timeouts) clearTimeout(id);
       startedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── Derived UI values ───────────────────────────────────────────────────
-
+  // ─── Derived UI ────────────────────────────────────────────────────────
   const statusLabel = isDone
     ? "Complete"
     : currentStep === "Authoring"
@@ -196,8 +175,7 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
     ? "Capturing payment…"
     : "Done";
 
-  // ─── Dot colours per kind ─────────────────────────────────────────────
-
+  // ─── Visual helpers ────────────────────────────────────────────────────
   function dotStyle(kind: EventKind): React.CSSProperties {
     const colors: Record<EventKind, string> = {
       working: "var(--amber)",
@@ -227,8 +205,63 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
     return colors[kind];
   }
 
-  // ─── Render ─────────────────────────────────────────────────────────────
+  // Render deliverable output
+  function renderWorkerOutput() {
+    if (!worker) return null;
+    if (worker.kind === "code") {
+      return (
+        <pre
+          style={{
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            color: "var(--ink)",
+            borderRadius: 10,
+            padding: "14px 18px",
+            fontSize: 12.5,
+            overflowX: "auto",
+            margin: 0,
+          }}
+        >
+          <code>{worker.output}</code>
+        </pre>
+      );
+    }
+    if (worker.kind === "json") {
+      return (
+        <pre
+          style={{
+            background: "var(--green-soft)",
+            border: "1px solid var(--green)",
+            color: "var(--green)",
+            borderRadius: 10,
+            padding: "14px 18px",
+            fontSize: 13,
+            margin: 0,
+          }}
+        >
+          {worker.output}
+        </pre>
+      );
+    }
+    return (
+      <pre
+        style={{
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
+          color: "var(--text)",
+          borderRadius: 10,
+          padding: "14px 18px",
+          fontSize: 13,
+          margin: 0,
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {worker.output}
+      </pre>
+    );
+  }
 
+  // ─── Render ────────────────────────────────────────────────────────────
   return (
     <section className="card fade-in">
       {/* Step header */}
@@ -238,7 +271,6 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
         </span>
         <span>Live Job Execution</span>
 
-        {/* Status pill */}
         <div
           style={{
             marginLeft: "auto",
@@ -260,9 +292,25 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
         </div>
       </div>
 
+      {error && (
+        <div
+          style={{
+            background: "var(--red-soft)",
+            border: "1px solid var(--red)",
+            color: "var(--red)",
+            padding: "10px 14px",
+            borderRadius: 10,
+            fontSize: 13,
+            marginBottom: 16,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
       <p className="text-muted text-sm" style={{ marginBottom: 20 }}>
-        Agent authors a deliverable — verifier checks it against the frozen test
-        suite. Payment is captured automatically on pass.
+        Worker agent authors a deliverable — verifier checks it against the
+        frozen test suite. Payment is captured automatically on pass.
       </p>
 
       {/* ── Step indicator ── */}
@@ -283,7 +331,11 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
               style={{ display: "flex", alignItems: "center", flex: 1 }}
             >
               <div
-                style={{ display: "flex", flexDirection: "column", alignItems: "center" }}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                }}
               >
                 <div
                   style={{
@@ -312,7 +364,9 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
                       : active
                       ? "var(--amber)"
                       : "var(--text-muted)",
-                    animation: active ? "pulse-dot 1.4s ease-in-out infinite" : undefined,
+                    animation: active
+                      ? "pulse-dot 1.4s ease-in-out infinite"
+                      : undefined,
                     transition: "all 0.4s ease",
                   }}
                 >
@@ -373,7 +427,9 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
             }}
           >
             Live activity{" "}
-            <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
+            <span
+              style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}
+            >
               (newest first)
             </span>
           </div>
@@ -392,117 +448,90 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
           </div>
         </div>
 
-        {/* Right: Verdict panels */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* Attempt 1 verdict */}
-          {attempt1Done && (
-            <div
-              className="fade-in"
-              style={{
-                borderRadius: 10,
-                border: "1px solid var(--red)",
-                background: "var(--red-soft)",
-                padding: 14,
-              }}
-            >
+        {/* Right: Verdict panels — one per attempt */}
+        <div
+          style={{ display: "flex", flexDirection: "column", gap: 14 }}
+        >
+          {attempts.slice(0, attemptsDone).map((a) => {
+            const isPass = a.passed;
+            return (
               <div
+                key={a.attempt}
+                className="fade-in"
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  marginBottom: 10,
+                  borderRadius: 10,
+                  border: `1px solid ${
+                    isPass ? "var(--green)" : "var(--red)"
+                  }`,
+                  background: isPass ? "var(--green-soft)" : "var(--red-soft)",
+                  padding: 14,
                 }}
               >
-                <span
+                <div
                   style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: "var(--red)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    marginBottom: 10,
                   }}
                 >
-                  Attempt 1 — 2/5 passed
-                </span>
-                <span className="badge badge-red">FAIL</span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {attempt1Results.map((r) => (
-                  <div
-                    key={r.id}
-                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  <span
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: isPass ? "var(--green)" : "var(--red)",
+                    }}
                   >
-                    <span
-                      className={`badge ${r.pass ? "badge-green" : "badge-red"}`}
-                      style={{ minWidth: 40, justifyContent: "center" }}
-                    >
-                      {r.pass ? "PASS" : "FAIL"}
-                    </span>
-                    <span className="font-mono text-xs text-muted">
-                      {r.id}
-                    </span>
-                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                      {r.name}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Attempt 2 verdict */}
-          {attempt2Done && (
-            <div
-              className="fade-in"
-              style={{
-                borderRadius: 10,
-                border: "1px solid var(--green)",
-                background: "var(--green-soft)",
-                padding: 14,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  marginBottom: 10,
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: "var(--green)",
-                  }}
+                    Attempt {a.attempt} — {a.testsPassed}/{a.totalTests}{" "}
+                    passed
+                  </span>
+                  <span
+                    className={`badge ${
+                      isPass ? "badge-green" : "badge-red"
+                    }`}
+                  >
+                    {isPass ? "PASS" : "FAIL"}
+                  </span>
+                </div>
+                <div
+                  style={{ display: "flex", flexDirection: "column", gap: 6 }}
                 >
-                  Attempt 2 — 5/5 passed
-                </span>
-                <span className="badge badge-green">PASS</span>
+                  {tests.map((tc) => {
+                    const failed = !isPass && (a.failingTestIds ?? []).includes(tc.id);
+                    return (
+                      <div
+                        key={tc.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span
+                          className={`badge ${
+                            failed ? "badge-red" : "badge-green"
+                          }`}
+                          style={{ minWidth: 40, justifyContent: "center" }}
+                        >
+                          {failed ? "FAIL" : "PASS"}
+                        </span>
+                        <span className="font-mono text-xs text-muted">
+                          {tc.id}
+                        </span>
+                        <span
+                          style={{ fontSize: 12, color: "var(--text-muted)" }}
+                        >
+                          {tc.name}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {ALL_TESTS.map((tc) => (
-                  <div
-                    key={tc.id}
-                    style={{ display: "flex", alignItems: "center", gap: 8 }}
-                  >
-                    <span
-                      className="badge badge-green"
-                      style={{ minWidth: 40, justifyContent: "center" }}
-                    >
-                      PASS
-                    </span>
-                    <span className="font-mono text-xs text-muted">
-                      {tc.id}
-                    </span>
-                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                      {tc.name}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+            );
+          })}
 
-          {!attempt1Done && !attempt2Done && (
+          {attempts.length === 0 && attemptsDone === 0 && (
             <p className="text-muted text-sm">
               Verdicts will appear here as the verifier runs…
             </p>
@@ -511,35 +540,70 @@ export default function LiveJobView({ demoState, onStateChange }: Props) {
       </div>
 
       {/* ── Done banner ── */}
-      {isDone && (
+      {isDone && worker && (
         <div className="success-banner fade-in" style={{ marginTop: 28 }}>
           <h2>✓ Complete — all testcases passed</h2>
           <p
             className="text-muted text-sm"
             style={{ marginBottom: 20 }}
           >
-            testsRun:&nbsp;5&nbsp;&nbsp;·&nbsp;&nbsp;testsPassed:&nbsp;5
+            testsRun:&nbsp;{currentAttempt?.totalTests ?? tests.length}
+            &nbsp;&nbsp;·&nbsp;&nbsp;testsPassed:&nbsp;
+            {currentAttempt?.testsPassed ?? tests.length}
+            {worker.source === "fallback" ? (
+              <span style={{ marginLeft: 8 }}>
+                <span
+                  className="badge"
+                  style={{
+                    background: "var(--amber-soft)",
+                    color: "var(--amber)",
+                  }}
+                >
+                  Fallback output
+                </span>
+              </span>
+            ) : (
+              <span style={{ marginLeft: 8 }}>
+                <span
+                  className="badge"
+                  style={{
+                    background: "var(--indigo-soft)",
+                    color: "var(--indigo)",
+                  }}
+                >
+                  Gemini output
+                </span>
+              </span>
+            )}
           </p>
 
-          <div style={{ textAlign: "left", display: "inline-block", maxWidth: 480, width: "100%" }}>
+          <div
+            style={{
+              textAlign: "left",
+              display: "inline-block",
+              maxWidth: 640,
+              width: "100%",
+            }}
+          >
             <p
               className="text-muted text-xs"
               style={{ marginBottom: 8, fontWeight: 600 }}
             >
-              Deliverable output
+              {worker.kind === "code"
+                ? `Deliverable source${
+                    worker.language ? ` · ${worker.language}` : ""
+                  }`
+                : "Deliverable output"}
             </p>
-            <pre
-              style={{
-                background: "var(--green-soft)",
-                border: "1px solid var(--green)",
-                color: "var(--green)",
-                borderRadius: 10,
-                padding: "14px 18px",
-                fontSize: 13,
-              }}
-            >
-              {`["alice@example.com", "bob@example.com"]`}
-            </pre>
+            {renderWorkerOutput()}
+            {worker.notes && (
+              <p
+                className="text-muted text-xs"
+                style={{ marginTop: 8, fontStyle: "italic" }}
+              >
+                {worker.notes}
+              </p>
+            )}
           </div>
         </div>
       )}

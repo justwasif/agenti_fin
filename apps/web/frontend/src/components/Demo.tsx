@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import RequestBuilder from "./RequestBuilder";
 import TestAuthoring from "./TestAuthoring";
 import LiveJobView from "./LiveJobView";
+import MoneySidebar from "./MoneySidebar";
 import type { DemoState } from "../App";
 
 const STORAGE_KEY = "powp-demo-state";
@@ -35,7 +36,7 @@ export default function Demo() {
 
   return (
     <div className="app-content">
-      {/* Header with back button */}
+      {/* Sub-nav */}
       <header className="header">
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <button
@@ -50,43 +51,33 @@ export default function Demo() {
             Proof<span className="logo-accent">Of</span>WorkPay
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            className="badge badge-amber"
-            style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em" }}
-          >
-            Demo mode
-          </span>
-          <span
-            style={{
-              color: "var(--text-muted)",
-              fontSize: 12,
-              fontStyle: "italic",
-            }}
-          >
-            No proof, no pay.
-          </span>
+        <div className="header-right">
+          <span className="badge badge-amber">Demo mode</span>
+          <span className="header-tagline">No proof, no pay.</span>
         </div>
       </header>
 
-      {/* Body */}
-      <main className="main-layout">
-        {/* Step 1: Request Builder — always shown */}
-        <RequestBuilder demoState={state} onCreate={handleCreate} />
+      {/* Two-column workspace */}
+      <div className="demo-workspace">
+        {/* Left: stacked step cards */}
+        <main className="demo-main">
+          <RequestBuilder demoState={state} onCreate={handleCreate} />
 
-        {/* Step 2: Test Authoring — shown after draft created */}
-        {(state === "draft" ||
-          state === "frozen" ||
-          state === "running" ||
-          state === "done") && (
-          <TestAuthoring demoState={state} onFreeze={handleFreeze} />
-        )}
+          {(state === "draft" ||
+            state === "frozen" ||
+            state === "running" ||
+            state === "done") && (
+            <TestAuthoring demoState={state} onFreeze={() => handleFreeze()} />
+          )}
 
-        {/* Step 3: Live Job View — shown once suite is frozen */}
-        {(state === "frozen" || state === "running" || state === "done") && (
-          <LiveJobView demoState={state} onStateChange={setState} />
-        )}
-      </main>
+          {(state === "frozen" || state === "running" || state === "done") && (
+            <LiveJobView demoState={state} onStateChange={setState} />
+          )}
+        </main>
+
+        {/* Right: sticky money sidebar */}
+        <MoneySidebar state={state} />
+      </div>
     </div>
   );
 }

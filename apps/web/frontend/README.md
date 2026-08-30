@@ -1,75 +1,56 @@
-# React + TypeScript + Vite
+# ProofOfWorkPay — demo
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A demo of the "no proof, no pay" idea: a buyer locks money, an AI worker
+produces a deliverable, a deterministic verifier runs the buyer's frozen
+tests against the deliverable, and the verifier — not the buyer —
+releases the funds on pass.
 
-Currently, two official plugins are available:
+## Two agents
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The demo runs two distinct agents against the Google Gemini API:
 
-## React Compiler
+1. **Test-Authoring Agent** — reads the buyer's job request and proposes
+   3–7 executable, deterministic test cases. (`POST /api/propose-tests`)
+2. **Worker Agent** — does the actual work and produces a real
+   deliverable. The output is **independent of the tests**: it is what
+   the model actually returns. (`POST /api/run-job`)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+A "verifier" plan is randomized on the server:
+- 1–3 total attempts (max 3, weighted toward 2)
+- every attempt except the last fails (1+ tests failing)
+- the final attempt always passes — so the demo ends green
+- the *worker's actual output* is unaffected by these pass/fail events;
+  the verifier is just a visual gate
 
-## Expanding the ESLint configuration
+If `GEMINI_API_KEY` is not set, both agents return small hardcoded
+fallback data so the UI still works end-to-end.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Running
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+```bash
+# 1. install
+npm install                  # frontend
+npm --prefix server install  # backend
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+# 2. set your Gemini key
+cp server/.env.example server/.env
+# edit server/.env and paste your key from https://aistudio.google.com/apikey
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+# 3. start both (Vite on :3000, API on :8787)
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+Then open <http://localhost:3000>.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+The Vite dev server proxies `/api/*` to the backend, so the frontend
+just calls `/api/run-job` etc. and doesn't need to know the backend
+URL.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## API
 
-```
+| Method | Path                | Body                              | Returns                                  |
+| ------ | ------------------- | --------------------------------- | ---------------------------------------- |
+| GET    | `/api/health`       | —                                 | `{ ok, hasKey, model }`                  |
+| POST   | `/api/propose-tests`| `{ jobTitle, jobRequest }`        | `{ tests, source }`                      |
+| POST   | `/api/run-job`      | `{ jobTitle, jobRequest }`        | `{ tests, worker, plan }`                |
+| POST   | `/api/verify`       | `{ totalTests, attempt, seed }`   | `{ attempt, totalAttempts }`             |
