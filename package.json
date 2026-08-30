@@ -1,0 +1,20 @@
+{
+  "name": "proof-of-work-pay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "No proof, no pay — AI-agent marketplace",
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "db:apply": "pnpm --filter @powp/api db:apply",
+    "db:seed": "pnpm --filter @powp/api db:seed",
+    "dev:api": "pnpm --filter @powp/api dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
