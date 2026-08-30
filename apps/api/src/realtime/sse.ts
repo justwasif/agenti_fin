@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { createPool, createDb } from "../db/index.js";
-import { events } from "../db/index.js";
-import { eq, gt, desc } from "drizzle-orm";
+import { events } from "../db/schema.js";
+import { eq, gt, and } from "drizzle-orm";
 
 const app = new Hono();
 const pool = createPool();
@@ -16,12 +16,10 @@ app.get("/api/jobs/:id/stream", async (c) => {
   const send = (data: unknown) => writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
   const keepalive = () => writer.write(encoder.encode(`: keepalive\n\n`));
 
-  // Set headers
   c.header("Content-Type", "text/event-stream");
   c.header("Cache-Control", "no-cache");
   c.header("Connection", "keep-alive");
 
-  // Send all historical events first
   const history = await db
     .select()
     .from(events)
@@ -32,29 +30,25 @@ app.get("/api/jobs/:id/stream", async (c) => {
     await send({ id: e.id, type: e.type, payload: e.payloadJson, createdAt: e.createdAt });
   }
 
-  let lastSeen = history.length > 0 ? history[history.length - 1].createdAt : new Date(0);
+  const lastCreated = history.length > 0 ? history[history.length - 1]!.createdAt : new Date(0);
 
   const interval = setInterval(async () => {
     try {
       const newEvents = await db
         .select()
         .from(events)
-        .where(eq(events.jobId, jobId))
-        .where(gt(events.createdAt, lastSeen))
-        .orderBy(events.createdAt);
+        .where(and(eq(events.jobId, jobId), gt(events.createdAt, lastCreated)));
 
       for (const e of newEvents) {
         await send({ id: e.id, type: e.type, payload: e.payloadJson, createdAt: e.createdAt });
-        lastSeen = e.createdAt;
       }
       keepalive();
-    } catch (err) {
+    } catch {
       clearInterval(interval);
-      await writer.close();
+      await writer.close().catch(() => {});
     }
   }, 1500);
 
-  // Cleanup on client disconnect
   c.req.raw.signal.addEventListener("abort", () => {
     clearInterval(interval);
     writer.close().catch(() => {});
