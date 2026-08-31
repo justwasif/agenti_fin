@@ -39,7 +39,16 @@ try {
 
 export default app;
 
-const port = Number(process.env.PORT ?? 8787);
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`[powp-api] listening on http://localhost:${info.port}`);
-});
+const port = Number(process.env.PORT ?? 8080);
+serve(
+  {
+    fetch: app.fetch,
+    port,
+    hostname: process.env.HOST ?? "0.0.0.0",
+  },
+  (info) => {
+    console.log(
+      `[powp-api] listening on http://${info.address}:${info.port}`
+    );
+  }
+);
